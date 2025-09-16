@@ -73,3 +73,44 @@ CXL没有公开可用且功能齐全的系统，因此作者自己用FPGA等配�
 ![alt text](CXL-ANNS_src/image-6.png)
 
 作者将CXL-ANNS与PQ量化、DiskANN，HM-ANN，Oracle纯内存进行了对比。
+
+### 性能测试结果
+
+![alt text](CXL-ANNS_src/image-8.png)
+
+![alt text](CXL-ANNS_src/image-9.png)
+
+对于PQ压缩的Baseline，在很多情况下往往达不到90%的recall要求，因为PQ压缩精度损失比较大。作者专门做了QPS和recall的曲线图，结果发现PQ压缩确实会出现recall收敛到固定值的情况。
+![alt text](CXL-ANNS_src/image-7.png)
+
+对于两种基于图的Baseline（DiskANN和HM-ANN），它们都能达到90%的recall目标，但由于需要访问SSD/PMEM，性能相比Oracle差很多。
+
+CXL的Base虽然比DiskANN等好很多，但是由于CXL内存访问时flit转换的开销，性能不如Oracle。
+
+将距离计算下放到EP节点后，通信开销显著降低（数据传输减少21x），延迟性能相较Oracle提升1.9x（这里的意思应该是Oracle的延迟是加入EP的CXL的1.9倍）
+![alt text](CXL-ANNS_src/image-10.png)
+
+缓存和预取加入后，由于部分图遍历操作可以从本地读取图信息，性能进一步提升，减少了32.7%的查询延迟。
+![alt text](CXL-ANNS_src/image-11.png)
+
+加入细粒度的查询调度后，完全体的CXL-ANNS的QPS进一步提升了15.5%，性能平均超过Oracle的3.8x。
+
+### 协同查询加速分析
+
+**预取**：为研究预取带来的性能提升，作者增加了一个有缓存但无预取的CXL-ANNS版本，对比了各版本的L1缓存未命中代价，结果显示尽管无预取状态下相比完全无缓存有一定的性能提升，但是在图规模较大时提升效果有限，甚至性能比Oracle差几倍。加入预取后可以进一步提升性能，超越Oracle。
+![alt text](CXL-ANNS_src/image-12.png)
+
+**细粒度调度**：作者设置了一个单CXL CPU和每个设备只有PE的版本，在Yandex-D数据集上研究细粒度调度对硬件利用率的影响。结果显示未开启细粒度调度时，CPU有42%的时间在空闲状态。加入细粒度调度后，空闲时间减少了1.3倍，硬件资源利用率提高了20.9%。
+![alt text](CXL-ANNS_src/image-13.png)
+
+### 可扩展性测试
+
+**更大的数据集**：作者向Yandex-D中添加了3B的噪音，构造了一个4B的数据集，并增加更多EP，在上面进行测试。尽管Oracle和CXL的性能都下降了，但CXL-ANNS的延迟仍然比Oracle低2.7倍。
+![alt text](CXL-ANNS_src/image-14.png)
+
+**多主机（host）**：作者将EP资源拆分分配给多个host，将向量分区存储，每个host查询一个分区并汇总查询结果，选出最好的k个。测试发现，host数量增加到4台时性能（QPS）一直在上升，增加到6台时性能会下降，因为PE不够用，遇到了瓶颈，此时继续增加EP数量可以解决瓶颈，性能继续提升。
+
+![alt text](CXL-ANNS_src/image-15.png)
+
+## 讨论
+对于GPU加速，作者认为使用CPU+GPU完全处理ANNS任务不可行（我不好说，后面两年好像就有用GPU的论文，感觉是拉踩）。一方面因为即使是纯内存环境，也需要考虑与GPU进行数据传输的开销，另一方面ANNS涉及的距离计算很简单，使用GPU效益不高。作者认为使用CXL，在靠近向量数据的地方进行距离计算是更好的选择。
